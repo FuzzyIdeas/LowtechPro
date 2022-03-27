@@ -1,6 +1,113 @@
+import Defaults
 import Lowtech
 import Paddle
 import SwiftDate
+
+// MARK: - LowtechProAppDelegate
+
+open class LowtechProAppDelegate: LowtechAppDelegate, PADProductDelegate, PaddleDelegate {
+    public var paddleVendorID = ""
+    public var paddleAPIKey = ""
+    public var paddleProductID = ""
+    public var productName = ""
+    public var vendorName = ""
+    public var price: NSNumber = 0
+    public var currency = "USD"
+    public var trialDays: NSNumber = 7
+    public var trialType: PADProductTrialType = .timeLimited
+    public var trialText = ""
+    public var image = ""
+
+    public lazy var pro = LowtechPro(
+        paddleVendorID: paddleVendorID,
+        paddleAPIKey: paddleAPIKey,
+        paddleProductID: paddleProductID,
+        productName: productName,
+        vendorName: vendorName,
+        price: price,
+        currency: currency,
+        trialDays: trialDays,
+        trialType: trialType,
+        trialText: trialText,
+        image: image,
+        productDelegate: self,
+        paddleDelegate: self
+    )
+
+    public func productPurchased(_ checkoutData: PADCheckoutData) {
+        Defaults[.paddleConsent] = checkoutData.orderData?.hasMarketingConsent ?? false
+    }
+
+    public func productActivated() {
+        pro.enablePro()
+    }
+
+    public func productDeactivated() {
+        pro.disablePro()
+    }
+
+    public func canAutoActivate(_ product: PADProduct) -> Bool {
+        guard let email = product.activationEmail, let code = product.licenseCode else {
+            return false
+        }
+        product.activateEmail(email, license: code)
+        return true
+    }
+
+    #if DEBUG
+        @objc public func resetTrial() {
+            guard let product = product else {
+                return
+            }
+            product.resetTrial()
+            pro.verifyLicense()
+        }
+
+        @objc public func expireTrial() {
+            guard let product = product else {
+                return
+            }
+            product.expireTrial()
+            pro.verifyLicense()
+        }
+    #endif
+
+    @IBAction public func activateLicense(_: Any) {
+        pro.showLicenseActivation()
+        if let statusBar = statusBar, statusBar.popover.isShown {
+            statusBar.window.makeKeyAndOrderFront(self)
+        }
+    }
+
+    @IBAction public func recoverLicense(_: Any) {
+        guard let paddle = paddle, let product = product else {
+            return
+        }
+        paddle.showLicenseRecovery(for: product) { _, error in
+            if let error = error {
+                printerr("Error on recovering license from Paddle: \(error)")
+            }
+        }
+    }
+
+    public func willShowPaddle(_: PADUIType, product _: PADProduct) -> PADDisplayConfiguration? {
+        if let statusBar = statusBar, !statusBar.popover.isShown {
+            statusBar.showPopover(self, center: true)
+        }
+
+        if let window = statusBar?.window, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            return PADDisplayConfiguration(.sheet, hideNavigationButtons: false, parentWindow: window)
+        }
+
+        return PADDisplayConfiguration(.window, hideNavigationButtons: false, parentWindow: nil)
+    }
+}
+
+public var paddle: Paddle?
+public var product: PADProduct?
+
+// MARK: - LowtechPro
 
 public class LowtechPro {
     // MARK: Lifecycle
@@ -34,64 +141,40 @@ public class LowtechPro {
         self.productDelegate = productDelegate
         self.paddleDelegate = paddleDelegate
 
+        paddle = Paddle.sharedInstance(
+            withVendorID: paddleVendorID, apiKey: paddleAPIKey, productID: paddleProductID,
+            configuration: productConfig, delegate: paddleDelegate
+        )
+
+        product = PADProduct(
+            productID: paddleProductID, productType: PADProductType.sdkProduct,
+            configuration: productConfig
+        )
+
+        guard let product = product else {
+            return
+        }
+
         product.delegate = productDelegate
         product.preventFreeUsageBeforeSubscriptionPurchase = true
         product.canForceExit = true
         product.willContinueAtTrialEnd = false
 
-        if product.activated {
+        if product.activated || trialActive(product: product) {
             enablePro()
         }
-        checkProLicense()
     }
 
-    // MARK: Internal
+    // MARK: Public
 
-    let paddleVendorID: String
-    let paddleAPIKey: String
-    let paddleProductID: String
-    let productName: String
-    let vendorName: String
-    let price: NSNumber
-    let currency: String
-    let trialDays: NSNumber
-    let trialType: PADProductTrialType
-    let trialText: String
-    let image: String?
+    public var onTrial = false
+    public var productActivated = false
 
-    weak var productDelegate: PADProductDelegate?
-    weak var paddleDelegate: PaddleDelegate?
+    public func showCheckout() {
+        guard let paddle = paddle, let product = product else {
+            return
+        }
 
-    lazy var productConfig: PADProductConfiguration = {
-        let defaultProductConfig = PADProductConfiguration()
-        defaultProductConfig.productName = productName
-        defaultProductConfig.vendorName = vendorName
-        defaultProductConfig.price = price
-        defaultProductConfig.currency = currency
-        defaultProductConfig.imagePath = image != nil ? Bundle.main.pathForImageResource(image!) : nil
-        defaultProductConfig.trialLength = trialDays
-        defaultProductConfig.trialType = trialType
-        defaultProductConfig.trialText = trialText
-
-        return defaultProductConfig
-    }()
-
-    lazy var paddle: Paddle! = Paddle.sharedInstance(
-        withVendorID: paddleVendorID, apiKey: paddleAPIKey, productID: paddleProductID,
-        configuration: productConfig, delegate: paddleDelegate
-    )
-
-    lazy var product: PADProduct! = PADProduct(
-        productID: paddleProductID, productType: PADProductType.sdkProduct,
-        configuration: productConfig
-    )
-
-    var retryUnverified = true
-    var onTrial = false
-
-    var productActivated = false
-
-    func showCheckout() {
         paddle.showCheckout(
             for: product, options: nil,
             checkoutStatusCompletion: {
@@ -114,7 +197,10 @@ public class LowtechPro {
         )
     }
 
-    func showLicenseActivation() {
+    public func showLicenseActivation() {
+        guard let paddle = paddle, let product = product else {
+            return
+        }
         paddle.showLicenseActivationDialog(for: product, email: nil, licenseCode: nil, activationStatusCompletion: { activationStatus in
             switch activationStatus {
             case .activated:
@@ -125,20 +211,23 @@ public class LowtechPro {
         })
     }
 
-    func licenseExpired(_ product: PADProduct) -> Bool {
+    public func licenseExpired(_ product: PADProduct) -> Bool {
         product.licenseCode != nil && (product.licenseExpiryDate ?? Date.distantFuture).isInPast
     }
 
-    func trialActive(product: PADProduct) -> Bool {
+    public func trialActive(product: PADProduct) -> Bool {
         let hasTrialDaysLeft = (product.trialDaysRemaining ?? NSNumber(value: 0)).intValue > 0
 
         return hasTrialDaysLeft && (product.licenseCode == nil || licenseExpired(product))
     }
 
-    func checkProLicense() {
-        product.refresh {
+    public func checkProLicense() {
+        guard let product = product else {
+            return
+        }
+        product.refresh { [self]
             (delta: [AnyHashable: Any]?, error: Error?) in
-                asyncNow { [self] in
+                mainAsync { [self] in
                     if let delta = delta, !delta.isEmpty {
                         print("Differences in \(product.productName ?? "product") after refresh")
                     }
@@ -155,24 +244,11 @@ public class LowtechPro {
         }
     }
 
-    @inline(__always) func enoughTimeHasPassedSinceLastVerification(product: PADProduct) -> Bool {
-        guard let verifyDate = product.lastVerifyDate else {
-            return true
+    public func verifyLicense(force: Bool = false) {
+        guard let paddle = paddle, let product = product else {
+            return
         }
-        if productActivated {
-            #if DEBUG
-                return true
-            #else
-                return timeSince(verifyDate) > 1.days.timeInterval
-            #endif
-        } else {
-            return timeSince(verifyDate) > 5.minutes.timeInterval
-        }
-    }
-
-    func verifyLicense(force: Bool = false) {
         guard force || enoughTimeHasPassedSinceLastVerification(product: product) else { return }
-
         product.verifyActivation { [self] (state: PADVerificationState, error: Error?) in
             if let verificationError = error {
                 printerr(
@@ -218,13 +294,67 @@ public class LowtechPro {
         }
     }
 
-    func enablePro() {
+    public func enablePro() {
+        guard let product = product else {
+            return
+        }
         productActivated = true
         onTrial = trialActive(product: product)
     }
 
-    func disablePro() {
+    public func disablePro() {
+        guard let product = product else {
+            return
+        }
         productActivated = false
         onTrial = trialActive(product: product)
+    }
+
+    // MARK: Internal
+
+    let paddleVendorID: String
+    let paddleAPIKey: String
+    let paddleProductID: String
+    let productName: String
+    let vendorName: String
+    let price: NSNumber
+    let currency: String
+    let trialDays: NSNumber
+    let trialType: PADProductTrialType
+    let trialText: String
+    let image: String?
+
+    weak var productDelegate: PADProductDelegate?
+    weak var paddleDelegate: PaddleDelegate?
+
+    lazy var productConfig: PADProductConfiguration = {
+        let defaultProductConfig = PADProductConfiguration()
+        defaultProductConfig.productName = productName
+        defaultProductConfig.vendorName = vendorName
+        defaultProductConfig.price = price
+        defaultProductConfig.currency = currency
+        defaultProductConfig.imagePath = image != nil ? Bundle.main.pathForImageResource(image!) : nil
+        defaultProductConfig.trialLength = trialDays
+        defaultProductConfig.trialType = trialType
+        defaultProductConfig.trialText = trialText
+
+        return defaultProductConfig
+    }()
+
+    var retryUnverified = true
+
+    @inline(__always) func enoughTimeHasPassedSinceLastVerification(product: PADProduct) -> Bool {
+        guard let verifyDate = product.lastVerifyDate else {
+            return true
+        }
+        if productActivated {
+            #if DEBUG
+                return true
+            #else
+                return timeSince(verifyDate) > 1.days.timeInterval
+            #endif
+        } else {
+            return timeSince(verifyDate) > 5.minutes.timeInterval
+        }
     }
 }
