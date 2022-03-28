@@ -1,3 +1,4 @@
+import Combine
 import Defaults
 import Lowtech
 import Paddle
@@ -109,7 +110,7 @@ public var product: PADProduct?
 
 // MARK: - LowtechPro
 
-public class LowtechPro {
+public class LowtechPro: ObservableObject {
     // MARK: Lifecycle
 
     public init(
@@ -167,8 +168,17 @@ public class LowtechPro {
 
     // MARK: Public
 
-    public var onTrial = false
-    public var productActivated = false
+    @Published public var onTrial = false
+    @Published public var productActivated = false
+
+    public var active: Bool { productActivated || onTrial }
+
+    public func manageLicence() {
+        guard let paddle = paddle, let product = product else {
+            return
+        }
+        paddle.showProductAccessDialog(with: product)
+    }
 
     public func showCheckout() {
         guard let paddle = paddle, let product = product else {
@@ -202,11 +212,13 @@ public class LowtechPro {
             return
         }
         paddle.showLicenseActivationDialog(for: product, email: nil, licenseCode: nil, activationStatusCompletion: { activationStatus in
-            switch activationStatus {
-            case .activated:
-                self.enablePro()
-            default:
-                return
+            mainAsync {
+                switch activationStatus {
+                case .activated:
+                    self.enablePro()
+                default:
+                    return
+                }
             }
         })
     }
@@ -250,46 +262,48 @@ public class LowtechPro {
         }
         guard force || enoughTimeHasPassedSinceLastVerification(product: product) else { return }
         product.verifyActivation { [self] (state: PADVerificationState, error: Error?) in
-            if let verificationError = error {
-                printerr(
-                    "Error on verifying activation of \(product.productName ?? "product") from Paddle: \(verificationError.localizedDescription)"
-                )
-            }
-
-            onTrial = trialActive(product: product)
-
-            switch state {
-            case .noActivation:
-                print("\(product.productName ?? "") noActivation")
-
-                if onTrial {
-                    self.enablePro()
-                } else {
-                    self.disablePro()
+            mainAsync {
+                if let verificationError = error {
+                    printerr(
+                        "Error on verifying activation of \(product.productName ?? "product") from Paddle: \(verificationError.localizedDescription)"
+                    )
                 }
-                paddle.showProductAccessDialog(with: product)
-            case .unableToVerify where error == nil:
-                print("\(product.productName ?? "Product") unableToVerify (network problems)")
-            case .unverified where error == nil:
-                if retryUnverified {
-                    retryUnverified = false
-                    print("\(product.productName ?? "Product") unverified (revoked remotely), retrying for safe measure")
-                    asyncAfter(ms: 3000) {
-                        self.verifyLicense(force: true)
+
+                onTrial = trialActive(product: product)
+
+                switch state {
+                case .noActivation:
+                    print("\(product.productName ?? "") noActivation")
+
+                    if onTrial {
+                        self.enablePro()
+                    } else {
+                        self.disablePro()
                     }
-                    return
-                }
-                print("\(product.productName ?? "Product") unverified (revoked remotely)")
+                    paddle.showProductAccessDialog(with: product)
+                case .unableToVerify where error == nil:
+                    print("\(product.productName ?? "Product") unableToVerify (network problems)")
+                case .unverified where error == nil:
+                    if retryUnverified {
+                        retryUnverified = false
+                        print("\(product.productName ?? "Product") unverified (revoked remotely), retrying for safe measure")
+                        asyncAfter(ms: 3000) {
+                            self.verifyLicense(force: true)
+                        }
+                        return
+                    }
+                    print("\(product.productName ?? "Product") unverified (revoked remotely)")
 
-                disablePro()
-                paddle.showProductAccessDialog(with: product)
-            case .verified:
-                print("\(product.productName ?? "Product") verified")
-                self.enablePro()
-            case PADVerificationState(rawValue: 2):
-                printerr("\(product.productName ?? "Product") verification failed because of network connection: \(state)")
-            default:
-                print("\(product.productName ?? "Product") verification unknown state: \(state)")
+                    disablePro()
+                    paddle.showProductAccessDialog(with: product)
+                case .verified:
+                    print("\(product.productName ?? "Product") verified")
+                    self.enablePro()
+                case PADVerificationState(rawValue: 2):
+                    printerr("\(product.productName ?? "Product") verification failed because of network connection: \(state)")
+                default:
+                    print("\(product.productName ?? "Product") verification unknown state: \(state)")
+                }
             }
         }
     }
