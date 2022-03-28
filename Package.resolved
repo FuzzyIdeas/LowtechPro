@@ -51,7 +51,7 @@
         "repositoryURL": "https://github.com/FuzzyIdeas/Lowtech",
         "state": {
           "branch": "main",
-          "revision": "421721829de314674415d32908de3b956e49377b",
+          "revision": "1ea4e791dd70dedff23d2d3a02058c5860d4e9f8",
           "version": null
         }
       },
@@ -98,6 +98,15 @@
           "branch": null,
           "revision": "2fcf7e43a242b183fdea3f2275ebec0d773b65f5",
           "version": "2.2.0"
+        }
+      },
+      {
+        "package": "Sparkle",
+        "repositoryURL": "https://github.com/sparkle-project/Sparkle",
+        "state": {
+          "branch": null,
+          "revision": "286edd1fa22505a9e54d170e9fd07d775ea233f2",
+          "version": "2.1.0"
         }
       },
       {

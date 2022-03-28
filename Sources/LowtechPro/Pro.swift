@@ -19,6 +19,8 @@ open class LowtechProAppDelegate: LowtechAppDelegate, PADProductDelegate, Paddle
     public var trialText = ""
     public var image = ""
 
+    public lazy var updateController = initUpdater()
+
     public lazy var pro = LowtechPro(
         paddleVendorID: paddleVendorID,
         paddleAPIKey: paddleAPIKey,
@@ -262,7 +264,7 @@ public class LowtechPro: ObservableObject {
         }
         guard force || enoughTimeHasPassedSinceLastVerification(product: product) else { return }
         product.verifyActivation { [self] (state: PADVerificationState, error: Error?) in
-            mainAsync {
+            mainAsync { [self] in
                 if let verificationError = error {
                     printerr(
                         "Error on verifying activation of \(product.productName ?? "product") from Paddle: \(verificationError.localizedDescription)"
@@ -280,7 +282,9 @@ public class LowtechPro: ObservableObject {
                     } else {
                         self.disablePro()
                     }
-                    paddle.showProductAccessDialog(with: product)
+                    if !onTrial {
+                        paddle.showProductAccessDialog(with: product)
+                    }
                 case .unableToVerify where error == nil:
                     print("\(product.productName ?? "Product") unableToVerify (network problems)")
                 case .unverified where error == nil:
@@ -295,7 +299,9 @@ public class LowtechPro: ObservableObject {
                     print("\(product.productName ?? "Product") unverified (revoked remotely)")
 
                     disablePro()
-                    paddle.showProductAccessDialog(with: product)
+                    if !onTrial {
+                        paddle.showProductAccessDialog(with: product)
+                    }
                 case .verified:
                     print("\(product.productName ?? "Product") verified")
                     self.enablePro()
